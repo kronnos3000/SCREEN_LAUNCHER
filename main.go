@@ -117,7 +117,7 @@ func (b button) windows() []winSpec {
 
 // jtViewURL returns the JobTread URL for a saved view.
 func jtViewURL(viewID string) string {
-	return fmt.Sprintf("https://app.jobtread.com/views/%s", viewID)
+	return fmt.Sprintf("https://app.jobtread.com/jobs?view=%s", viewID)
 }
 
 func configPath() string {
@@ -125,7 +125,9 @@ func configPath() string {
 	if err != nil {
 		return "presets.json"
 	}
-	return filepath.Join(filepath.Dir(exe), "ScreenLauncher-presets.json")
+	// Each variant gets its own config file
+	filename := fmt.Sprintf("ScreenLauncher-%s-presets.json", Variant)
+	return filepath.Join(filepath.Dir(exe), filename)
 }
 
 func saveConfig(c config) error {
@@ -157,6 +159,23 @@ func loadConfig() (config, string) {
 		return defaultConfig(), "Settings file has an error - using defaults."
 	}
 	d := defaultConfig()
+	// SD variant: ensure SalesDisplay is initialized
+	if Variant == "SD" {
+		if c.SalesDisplay == nil {
+			c.SalesDisplay = d.SalesDisplay
+		} else {
+			if c.SalesDisplay.MeetURL == "" {
+				c.SalesDisplay.MeetURL = d.SalesDisplay.MeetURL
+			}
+			if c.SalesDisplay.ListViewID == "" {
+				c.SalesDisplay.ListViewID = d.SalesDisplay.ListViewID
+			}
+			if c.SalesDisplay.KanbanViewID == "" {
+				c.SalesDisplay.KanbanViewID = d.SalesDisplay.KanbanViewID
+			}
+		}
+	}
+	// CR2 variant: ensure Gantt is initialized
 	if c.Gantt.MeetURL == "" {
 		c.Gantt = d.Gantt
 	}
@@ -641,7 +660,8 @@ func runPreset(label string, wins []winSpec) {
 		if len(s.tabs()) == 0 {
 			continue
 		}
-		if err := openOne(chrome, s, pickMonitor(ms, s.Monitor), s.Minimized); err != nil {
+		minimized := s.Minimized || strings.ToLower(s.Monitor) == "minimized"
+		if err := openOne(chrome, s, pickMonitor(ms, s.Monitor), minimized); err != nil {
 			problem = err.Error()
 		}
 	}

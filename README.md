@@ -26,8 +26,9 @@ One-click Windows launcher that opens Chrome windows on specific monitors. Auto-
 ## Configuration
 
 - **JobTread Key**: `JOBTREAD_GRANT_KEY` environment variable, or via Preferences dialog
-- **Presets**: `ScreenLauncher-presets.json` next to the exe (created on first run)
+- **Presets**: `ScreenLauncher-{variant}-presets.json` next to the exe (each variant has its own config)
 - **Auto-update**: Checks GitHub releases on startup, downloads and applies updates automatically
+- **JobTread Views**: Opens saved views via `https://app.jobtread.com/jobs?view={viewId}`
 
 ## Build
 

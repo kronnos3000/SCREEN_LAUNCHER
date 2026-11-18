@@ -75,6 +75,9 @@ Built-in presets: Meet main + JobTread second; JobTread main + Meet second; Meet
 - [x] **Variant system** — CR2 (dual screen) and SD (single screen) built from same codebase
 - [x] **Auto-updater** — checks GitHub releases, downloads correct variant, self-replaces
 - [x] **SD variant** — Sales Display with SALES PIPELINE views (List + Kanban), Meet minimized
+- [x] **Separate config files** — each variant has its own `ScreenLauncher-{variant}-presets.json`
+- [x] **SD Preferences dialog** — form-based settings for Meet URL, screen selection (with minimized option), and JobTread view dropdowns
+- [x] **JobTread view URLs** — correct format `?view={id}` discovered and implemented
 
 **Build both:** `.\build.ps1 -Version "1.0.0"`
 

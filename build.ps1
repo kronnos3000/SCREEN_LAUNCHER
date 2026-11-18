@@ -14,11 +14,11 @@ Set-Location $root
 function Build-Variant {
     param([string]$V, [string]$Ver)
 
-    $ldflags = "-H windowsgui -s -w -X main.Variant=$V -X main.Version=$Ver"
     $outFile = Join-Path $Out "ScreenLauncher-$V.exe"
 
     Write-Host "Building $V variant (v$Ver)..." -ForegroundColor Cyan
-    go build -ldflags $ldflags -o $outFile .
+    # Use explicit quoting for ldflags to ensure -X flags are passed correctly
+    & go build "-ldflags=-H windowsgui -s -w -X main.Variant=$V -X main.Version=$Ver" -o $outFile .
     if ($LASTEXITCODE) { throw "Build failed for variant $V" }
 
     $size = (Get-Item $outFile).Length / 1MB

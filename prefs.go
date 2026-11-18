@@ -25,6 +25,9 @@ const (
 	idView     = 1009
 	idCloseChk = 1010
 	idChrome   = 1011
+	// SD-specific
+	idSDListView   = 1020
+	idSDKanbanView = 1021
 
 	wmViewsLoaded = 0x8001 // WM_APP + 1
 	cbnSelChange  = 1
@@ -54,6 +57,7 @@ const (
 var screenOpts = []struct{ label, val string }{
 	{"Left screen", "left"}, {"Right screen", "right"}, {"Main screen", "main"},
 	{"Second screen", "second"}, {"Third screen", "third"},
+	{"Main screen (minimized)", "minimized"},
 }
 
 var (
@@ -105,6 +109,13 @@ func openPrefs() {
 		pSetForegroundWindow.Call(prefsWnd)
 		return
 	}
+
+	// SD variant gets a simpler preferences dialog
+	if Variant == "SD" {
+		openSDPrefs()
+		return
+	}
+
 	pad, lw, fw, rh, gap := sc(18), sc(220), sc(380), sc(28), sc(10)
 	otherH := 4 * rh
 	clientW := pad + lw + fw + pad
@@ -352,9 +363,16 @@ func prefsProc(h uintptr, m uint32, wp, lp uintptr) uintptr {
 			}
 			return 0
 		case idSave:
-			if savePrefs() {
-				buildMenu("Preferences saved.")
-				closePrefs()
+			if Variant == "SD" {
+				if saveSDPrefs() {
+					buildMenu("Preferences saved.")
+					closePrefs()
+				}
+			} else {
+				if savePrefs() {
+					buildMenu("Preferences saved.")
+					closePrefs()
+				}
 			}
 			return 0
 		case idCancel:
@@ -371,20 +389,210 @@ func prefsProc(h uintptr, m uint32, wp, lp uintptr) uintptr {
 				return 0
 			}
 			prefViews = v
-			hv := prefsCtl[idView]
-			pSendMessage.Call(hv, cbResetContent, 0, 0)
-			cur := 0
-			for i, x := range v {
-				comboAdd(hv, x.Name)
-				if x.ID == cfg.JobTread.ViewID {
-					cur = i
+			// Update the appropriate view dropdowns based on variant
+			if Variant == "SD" {
+				// Update both list and kanban dropdowns for SD
+				for _, pair := range []struct {
+					id      int
+					curID   string
+				}{
+					{idSDListView, cfg.SalesDisplay.ListViewID},
+					{idSDKanbanView, cfg.SalesDisplay.KanbanViewID},
+				} {
+					hv := prefsCtl[pair.id]
+					if hv == 0 {
+						continue
+					}
+					pSendMessage.Call(hv, cbResetContent, 0, 0)
+					cur := 0
+					for i, x := range v {
+						comboAdd(hv, x.Name)
+						if x.ID == pair.curID {
+							cur = i
+						}
+					}
+					pSendMessage.Call(hv, cbSetCurSel, uintptr(cur), 0)
 				}
+			} else {
+				hv := prefsCtl[idView]
+				pSendMessage.Call(hv, cbResetContent, 0, 0)
+				cur := 0
+				for i, x := range v {
+					comboAdd(hv, x.Name)
+					if x.ID == cfg.JobTread.ViewID {
+						cur = i
+					}
+				}
+				pSendMessage.Call(hv, cbSetCurSel, uintptr(cur), 0)
 			}
-			pSendMessage.Call(hv, cbSetCurSel, uintptr(cur), 0)
 		default:
 		}
 		return 0
 	}
 	r, _, _ := pDefWindowProc.Call(h, uintptr(m), wp, lp)
 	return r
+}
+
+// ---------- SD Preferences ----------
+
+func openSDPrefs() {
+	pad, lw, fw, rh, gap := sc(18), sc(220), sc(380), sc(28), sc(10)
+	clientW := pad + lw + fw + pad
+	clientH := pad + 5*(rh+gap) + sc(14) + 2*(rh+gap) + sc(6) + sc(32) + pad
+
+	style := uintptr(wsOverlapped | wsCaption | wsSysMenu)
+	r := rect{0, 0, int32(clientW), int32(clientH)}
+	pAdjustWindowRectEx.Call(uintptr(unsafe.Pointer(&r)), style, 0, wsExDlgModal)
+	ww, wh := int(r.Right-r.Left), int(r.Bottom-r.Top)
+	var mr rect
+	pGetWindowRect.Call(mainWnd, uintptr(unsafe.Pointer(&mr)))
+	x := int(mr.Left) + (int(mr.Right-mr.Left)-ww)/2
+	y := int(mr.Top) + (int(mr.Bottom-mr.Top)-wh)/2
+	if y < 0 {
+		y = 0
+	}
+
+	prefsWnd, _, _ = pCreateWindowEx.Call(wsExDlgModal, uintptr(unsafe.Pointer(prefsCls)),
+		uintptr(unsafe.Pointer(u16("Sales Display Preferences"))), style,
+		uintptr(x), uintptr(y), uintptr(ww), uintptr(wh), mainWnd, 0, hInst, 0)
+	if prefsWnd == 0 {
+		return
+	}
+	setWindowIcon(prefsWnd)
+	prefsCtl = map[int]uintptr{}
+
+	// Ensure SalesDisplay config exists
+	if cfg.SalesDisplay == nil {
+		cfg.SalesDisplay = &sdSettings{
+			MeetURL:       "https://ccorps.net/companywidemeeting",
+			MeetMinimized: true,
+			ListViewID:    "22PheCYEmTBN",
+			KanbanViewID:  "22PggTBEEDCM",
+		}
+	}
+
+	cy := pad
+	label := func(t string) {
+		mkCtl(prefsWnd, 0, "STATIC", t, 0, pad, cy+sc(5), lw-sc(8), rh, 0, fontBtn)
+	}
+	combo := func(id, x, w int) uintptr {
+		h := mkCtl(prefsWnd, 0, "COMBOBOX", "", cbsDropDownList|wsVScroll|wsTabStop, x, cy, w, sc(300), id, fontBtn)
+		prefsCtl[id] = h
+		return h
+	}
+	edit := func(id int, text string) {
+		prefsCtl[id] = mkCtl(prefsWnd, wsExClientEdge, "EDIT", text, esAutoHScroll|wsTabStop, pad+lw, cy, fw, rh, id, fontBtn)
+	}
+	next := func() { cy += rh + gap }
+
+	// --- SD-specific fields ---
+	label("Google Meet link:")
+	edit(idMeet, cfg.SalesDisplay.MeetURL)
+	next()
+
+	label("Meet opens on:")
+	hms := combo(idMeetScr, pad+lw, fw)
+	for _, o := range screenOpts {
+		comboAdd(hms, o.label)
+	}
+	// Set to minimized if that's the setting
+	meetIdx := len(screenOpts) - 1 // default to minimized (last option)
+	if !cfg.SalesDisplay.MeetMinimized {
+		meetIdx = 2 // main screen
+	}
+	pSendMessage.Call(hms, cbSetCurSel, uintptr(meetIdx), 0)
+	next()
+
+	label("Sales Pipeline (List View):")
+	hlv := combo(idSDListView, pad+lw, fw)
+	comboAdd(hlv, "Loading views...")
+	pSendMessage.Call(hlv, cbSetCurSel, 0, 0)
+	next()
+
+	label("Sales Pipeline (Kanban):")
+	hkv := combo(idSDKanbanView, pad+lw, fw)
+	comboAdd(hkv, "Loading views...")
+	pSendMessage.Call(hkv, cbSetCurSel, 0, 0)
+	next()
+
+	// --- general settings ---
+	mkCtl(prefsWnd, 0, "STATIC", "", 0x10, pad, cy+sc(6), clientW-2*pad, 2, 0, fontSmall) // SS_ETCHEDHORZ
+	cy += sc(14)
+
+	ck := mkCtl(prefsWnd, 0, "BUTTON", "Close this menu after launching", bsAutoCheckbox|wsTabStop,
+		pad+lw, cy, fw, rh, idCloseChk, fontBtn)
+	prefsCtl[idCloseChk] = ck
+	if cfg.CloseAfterLaunch {
+		pSendMessage.Call(ck, bmSetCheck, 1, 0)
+	}
+	next()
+
+	label("Chrome location (blank = auto):")
+	edit(idChrome, cfg.Browser)
+	next()
+
+	cy += sc(6)
+	bw := sc(110)
+	mkCtl(prefsWnd, 0, "BUTTON", "Cancel", wsTabStop, clientW-pad-bw, cy, bw, sc(32), idCancel, fontBtn)
+	mkCtl(prefsWnd, 0, "BUTTON", "Save", bsDefPushButton|wsTabStop, clientW-pad-2*bw-sc(10), cy, bw, sc(32), idSave, fontBtn)
+
+	pEnableWindow.Call(mainWnd, 0)
+	pShowWindow.Call(prefsWnd, swShow)
+	pSetForegroundWindow.Call(prefsWnd)
+
+	// Load views in background
+	select {
+	case <-viewsCh:
+	default:
+	}
+	prefViews = nil
+	h, jts := prefsWnd, cfg.JobTread
+	go func() {
+		if v, err := jtViews(jts); err == nil && len(v) > 0 {
+			viewsCh <- v
+			pPostMessage.Call(h, wmViewsLoaded, 0, 0)
+		}
+	}()
+}
+
+func saveSDPrefs() bool {
+	chrome := strings.Trim(strings.TrimSpace(getText(prefsCtl[idChrome])), `"`)
+	if chrome != "" {
+		if _, err := os.Stat(chrome); err != nil {
+			msgBox("Chrome was not found at that location.\nLeave it blank to find Chrome automatically.", 0x30)
+			return false
+		}
+	}
+
+	c := cfg
+	if c.SalesDisplay == nil {
+		c.SalesDisplay = &sdSettings{}
+	}
+	c.SalesDisplay.MeetURL = normURL(getText(prefsCtl[idMeet]))
+
+	// Check if minimized is selected
+	if i := comboSel(idMeetScr); i >= 0 && i < len(screenOpts) {
+		c.SalesDisplay.MeetMinimized = screenOpts[i].val == "minimized"
+	}
+
+	// Get selected views
+	if prefViews != nil {
+		if i := comboSel(idSDListView); i >= 0 && i < len(prefViews) {
+			c.SalesDisplay.ListViewID = prefViews[i].ID
+		}
+		if i := comboSel(idSDKanbanView); i >= 0 && i < len(prefViews) {
+			c.SalesDisplay.KanbanViewID = prefViews[i].ID
+		}
+	}
+
+	chk, _, _ := pSendMessage.Call(prefsCtl[idCloseChk], bmGetCheck, 0, 0)
+	c.CloseAfterLaunch = chk == 1
+	c.Browser = chrome
+
+	if err := saveConfig(c); err != nil {
+		msgBox("Could not save: "+err.Error(), 0x10)
+		return false
+	}
+	cfg = c
+	return true
 }
