@@ -20,11 +20,12 @@ import (
 // ---------- config ----------
 
 type winSpec struct {
-	URL     string   `json:"url,omitempty"`
-	URLs    []string `json:"urls,omitempty"` // more tabs in the same window (one Chrome call)
-	Monitor string   `json:"monitor"`        // "main", "second", "third"
-	App     bool     `json:"app,omitempty"`  // chromeless window; first URL only
-	JT      string   `json:"jt,omitempty"`   // JobTread view jobs: "first", "second" or "all"
+	URL       string   `json:"url,omitempty"`
+	URLs      []string `json:"urls,omitempty"` // more tabs in the same window (one Chrome call)
+	Monitor   string   `json:"monitor"`        // "main", "second", "third"
+	App       bool     `json:"app,omitempty"`  // chromeless window; first URL only
+	JT        string   `json:"jt,omitempty"`   // JobTread view jobs: "first", "second" or "all"
+	Minimized bool     `json:"minimized,omitempty"` // open minimized (for recording)
 }
 
 func (s winSpec) tabs() []string {
@@ -50,11 +51,12 @@ type meeting struct {
 }
 
 type config struct {
-	Browser          string     `json:"browser"`
-	CloseAfterLaunch bool       `json:"closeAfterLaunch"`
-	Gantt            meeting    `json:"gantt"` // also opens the JobTread view's jobs
-	Meetings         []meeting  `json:"meetings"`
-	JobTread         jtSettings `json:"jobtread"`
+	Browser          string      `json:"browser"`
+	CloseAfterLaunch bool        `json:"closeAfterLaunch"`
+	Gantt            meeting     `json:"gantt,omitempty"`    // CR2: also opens the JobTread view's jobs
+	Meetings         []meeting   `json:"meetings,omitempty"` // CR2: other meetings
+	SalesDisplay     *sdSettings `json:"salesDisplay,omitempty"` // SD: Sales Display settings
+	JobTread         jtSettings  `json:"jobtread"`
 }
 
 // One button on the menu.
@@ -63,35 +65,44 @@ type button struct {
 	Label string
 	part  string // Gantt: "first", "second", "all"
 	mtg   int    // index into cfg.Meetings when part == ""
+	sd    string // SD variant: "launch" to launch Sales Display
 }
 
 const ganttGroup = "Weekly Gantt meeting"
+const sdGroup = "Sales Display"
 
 func defaultConfig() config {
-	m := func(name, meet string, other ...string) meeting {
-		return meeting{Name: name, MeetURL: meet, MeetScreen: "left", OtherScreen: "right", OtherLinks: other}
-	}
-	return config{
-		Gantt: m(ganttGroup, "https://ccorps.net/productiongooglemeet"),
-		Meetings: []meeting{
-			m("In-office meeting", "https://ccorps.net/in-officegooglemeet", "https://ccorps.net/in-officemeetingnotes"),
-			m("Company-wide meeting", "https://ccorps.net/companywidemeeting"),
-			m("Field team meeting", "https://ccorps.net/fieldteamgooglemeet"),
-		},
-		JobTread: defaultJT(),
-	}
+	return defaultConfigForVariant(Variant)
 }
 
 func menuButtons() []button {
-	b := []button{{ganttGroup, "1st half", "first", 0}, {ganttGroup, "2nd half", "second", 0}, {ganttGroup, "All", "all", 0}}
+	if Variant == "SD" {
+		return []button{{Group: sdGroup, Label: "Launch Sales Display", sd: "launch"}}
+	}
+	// CR2 variant: Gantt + Meetings
+	b := []button{
+		{Group: ganttGroup, Label: "1st half", part: "first"},
+		{Group: ganttGroup, Label: "2nd half", part: "second"},
+		{Group: ganttGroup, Label: "All", part: "all"},
+	}
 	for i, m := range cfg.Meetings {
-		b = append(b, button{"Meetings", m.Name, "", i})
+		b = append(b, button{Group: "Meetings", Label: m.Name, mtg: i})
 	}
 	return b
 }
 
 // windows turns a button into the Chrome windows to open, using current Preferences.
 func (b button) windows() []winSpec {
+	// SD variant: open Meet minimized + Sales Pipeline views
+	if b.sd == "launch" && cfg.SalesDisplay != nil {
+		sd := cfg.SalesDisplay
+		return []winSpec{
+			{URL: sd.MeetURL, Monitor: "main", Minimized: sd.MeetMinimized},
+			{URL: jtViewURL(sd.ListViewID), Monitor: "main"},
+			{URL: jtViewURL(sd.KanbanViewID), Monitor: "main"},
+		}
+	}
+	// CR2 variant: Gantt meetings
 	m := cfg.Gantt
 	if b.part == "" {
 		m = cfg.Meetings[b.mtg]
@@ -102,6 +113,11 @@ func (b button) windows() []winSpec {
 		w = append(w, other)
 	}
 	return w
+}
+
+// jtViewURL returns the JobTread URL for a saved view.
+func jtViewURL(viewID string) string {
+	return fmt.Sprintf("https://app.jobtread.com/views/%s", viewID)
 }
 
 func configPath() string {
@@ -481,7 +497,7 @@ func place(h uintptr, m monitor) {
 	}
 }
 
-func openOne(chrome string, s winSpec, m monitor) error {
+func openOne(chrome string, s winSpec, m monitor, minimized bool) error {
 	tabs := s.tabs()
 	if len(tabs) == 0 {
 		return nil
@@ -524,8 +540,13 @@ func openOne(chrome string, s winSpec, m monitor) error {
 				target = h
 			}
 		}
-		place(target, m)
-		logf("placed")
+		if minimized {
+			pShowWindow.Call(target, 6) // SW_MINIMIZE
+			logf("minimized")
+		} else {
+			place(target, m)
+			logf("placed")
+		}
 		return nil
 	}
 	return fmt.Errorf("the browser window never appeared")
@@ -620,7 +641,7 @@ func runPreset(label string, wins []winSpec) {
 		if len(s.tabs()) == 0 {
 			continue
 		}
-		if err := openOne(chrome, s, pickMonitor(ms, s.Monitor)); err != nil {
+		if err := openOne(chrome, s, pickMonitor(ms, s.Monitor), s.Minimized); err != nil {
 			problem = err.Error()
 		}
 	}
@@ -674,14 +695,20 @@ func buildMenu(status string) {
 		head string
 		idx  []int
 	}
-	// Gantt: one heading + a row of three. Meetings: one heading + one button per row.
-	rows := []row{{ganttGroup, []int{0, 1, 2}}}
-	for i := 3; i < len(shown); i++ {
-		head := ""
-		if i == 3 {
-			head = "Meetings"
+	var rows []row
+	if Variant == "SD" {
+		// SD: single big button
+		rows = []row{{sdGroup, []int{0}}}
+	} else {
+		// CR2: Gantt: one heading + a row of three. Meetings: one heading + one button per row.
+		rows = []row{{ganttGroup, []int{0, 1, 2}}}
+		for i := 3; i < len(shown); i++ {
+			head := ""
+			if i == 3 {
+				head = "Meetings"
+			}
+			rows = append(rows, row{head, []int{i}})
 		}
-		rows = append(rows, row{head, []int{i}})
 	}
 	ctl := func(class, text string, st uintptr, cx, cy, cw, ch, id int, font uintptr) uintptr {
 		c := mkCtl(mainWnd, 0, class, text, st, cx, cy, cw, ch, id, font)
@@ -695,7 +722,11 @@ func buildMenu(status string) {
 		pSendMessage.Call(lg, 0x0172, 0, bmp)                                  // STM_SETIMAGE, IMAGE_BITMAP
 		cy += lh + sc(8)
 	}
-	ctl("STATIC", "Meeting Launcher", ssCenter, pad, cy, bw, sc(26), 0, fontTitle)
+	title := "Meeting Launcher"
+	if Variant == "SD" {
+		title = "Sales Display"
+	}
+	ctl("STATIC", title, ssCenter, pad, cy, bw, sc(26), 0, fontTitle)
 	cy += sc(26) + gap
 	for _, r := range rows {
 		if r.head != "" {
@@ -746,10 +777,10 @@ func main() {
 	registerPrefsClass(cur)
 
 	style := uintptr(wsOverlapped | wsCaption | wsSysMenu | wsMinimizeBox)
-	mainWnd, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16(appTitle))),
+	mainWnd, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16(appTitle()))),
 		style, 200, 200, 400, 400, 0, 0, hInst, 0)
 	if mainWnd == 0 {
-		pMessageBox.Call(0, uintptr(unsafe.Pointer(u16("Could not create the window."))), uintptr(unsafe.Pointer(u16(appTitle))), 0x10)
+		pMessageBox.Call(0, uintptr(unsafe.Pointer(u16("Could not create the window."))), uintptr(unsafe.Pointer(u16(appTitle()))), 0x10)
 		return
 	}
 
@@ -783,6 +814,11 @@ func main() {
 	pUpdateWindow.Call(mainWnd)
 	pSetForegroundWindow.Call(mainWnd)
 
+	// Check for updates in background (only if not dev build)
+	if Version != "dev" {
+		go doUpdateCheck(setStatus)
+	}
+
 	var m msg
 	for {
 		r, _, _ := pGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
@@ -801,4 +837,6 @@ func main() {
 	}
 }
 
-const appTitle = "Construction Corps Meeting Launcher"
+func appTitle() string {
+	return CurrentVariant().Title
+}

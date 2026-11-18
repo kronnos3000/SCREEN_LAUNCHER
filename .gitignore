@@ -1,5 +1,8 @@
 *.exe
 *.syso
+*.zip
 .env
 ScreenLauncher-presets.json
 installer/payload/
+update.bat
+*.old

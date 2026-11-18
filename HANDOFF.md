@@ -72,8 +72,11 @@ Built-in presets: Meet main + JobTread second; JobTread main + Meet second; Meet
 - [x] Preferences dialog (form-based, not JSON editing)
 - [x] JobTread integration with secure key storage (DPAPI)
 - [x] Weekly Gantt meeting preset with 1st half / 2nd half / All buttons
+- [x] **Variant system** — CR2 (dual screen) and SD (single screen) built from same codebase
+- [x] **Auto-updater** — checks GitHub releases, downloads correct variant, self-replaces
+- [x] **SD variant** — Sales Display with SALES PIPELINE views (List + Kanban), Meet minimized
 
-**Next:** Tag `v1.0.0` when ready for release.
+**Build both:** `.\build.ps1 -Version "1.0.0"`
 
 ### Test checklist
 
